@@ -14,23 +14,24 @@ import Data.Bits
 import Data.Char (chr,ord)
 import Data.Lens
 import Data.Lens.Template
+import Data.List (intersperse)
 import Data.Map as M hiding (null)
 import Data.Maybe
 import Prelude hiding ((.))
 import Text.Parsec hiding (label)
 import Text.Parsec.Char
-import Text.Parsec.ByteString
 
 -- Utility code
 (??) t _ True  = t
 (??) _ f False = f
+
+io = liftIO
 
 a !!= b = (a != b) >> return ()
 
 item :: Integer -> Lens (Array Int a) a
 item idx = lens (Data.Array.! (fromInteger idx)) (\v a -> a // [(fromInteger idx,v)])
 
-showState = get >>= (liftIO . print)
 
 -- Parsing stuff
 
@@ -38,7 +39,12 @@ type ProgPtr = [Tok]
 data Tok = Label String
          | Number Integer
          | Keyword String       
-        deriving (Show, Eq, Ord)
+
+instance Show Tok where
+	show (Label s) = s ++ ":"
+	show (Number n) = "\t" ++ show n
+	show (Keyword k) = "\t" ++ k
+	showList l tail = concat (intersperse "\n" (show <$> take 10 l)) ++ tail
 
 comment = string "/*" >> in_comment
 voidChar = () <$ anyChar
@@ -67,8 +73,16 @@ allLabels = M.fromList . allLabels' where
         allLabels' (_ : xs) = allLabels' xs
 
 -- Evaluating
-data Value = IntVal Integer | PtrVal ProgPtr deriving Show
-type Stack = (Maybe String, Value)
+data Value = IntVal Integer | PtrVal ProgPtr
+newtype Stack = Stack { unStack :: (Maybe String, Value) }
+
+instance Show Stack where
+	show (Stack (Nothing, v)) = show v
+	show (Stack (Just var, v)) = "<" ++ var ++ ">" ++ show v
+
+instance Show Value where
+	show (IntVal n) = show n
+	show (PtrVal _) = "<pointer>"
 
 data ProgState = ProgState {
         _stack :: [Stack],
@@ -79,29 +93,32 @@ data ProgState = ProgState {
 
 $( makeLenses [''ProgState] )
 
-
 initProg p = ProgState [] (allLabels p) (listArray (0,1000) (repeat (IntVal 0)))  p
 
-push = (>> return ()) . (stack %=) . (:) 
+crash reason = (get >>= io.print) >> (ip !!= [])
+
+push = (>> return ()) . (stack %=) . (:) . Stack 
 pushi x = push (Nothing, IntVal x)
 
 ucons l = (head l, tail l)
 
-pop  = stack %%= ucons
+pop  = unStack <$> (stack %%= ucons)
 popi = do { (_, IntVal v) <- pop; return v }
 popp = do { (_, PtrVal p) <- pop; return p }
 
-binop f = do { x <- popi; y <- popi; pushi (x `f` y) }
+binop f = do { y <- popi; x <- popi; pushi (x `f` y) }
 
 cjump test = do
-	yes <- popp
 	no <- popp
-	if test
+	yes <- popp
+	x <- popi
+	if test x
 		then ip !!= yes
 		else ip !!= no
 
 step = (ip %%= ucons) >>= exec 
-debugStep = showState >> liftIO getLine >> step
+
+dumpLens l = access l >>= (io . print)
 
 terminate = null <$> access ip
 
@@ -115,18 +132,18 @@ exec (Keyword "call") = do
         ip !!= tgt
 exec (Keyword "dup") = do { x <- pop; push x; push x }
 exec (Keyword "exit") = ip !!= []
-exec (Keyword "ifz") = popi >>= cjump . (== 0)
-exec (Keyword "ifg") = popi >>= cjump . (> 0)
+exec (Keyword "ifz") = cjump (== 0)
+exec (Keyword "ifg") = cjump (> 0)
 exec (Keyword "jump") = popp >>= (ip !!=)
 exec (Keyword "mod") = binop mod
-exec (Keyword "print_byte") = popi >>= liftIO.putChar.chr.fromInteger
-exec (Keyword "print_num") = popi >>= liftIO.print
-exec (Keyword "read_num") = liftIO readLn >>= pushi
-exec (Keyword "read_byte") = liftIO getChar >>= pushi.toInteger.ord
+exec (Keyword "print_byte") = popi >>= io.putChar.chr.fromInteger
+exec (Keyword "print_num") = popi >>= io.putStr.show
+exec (Keyword "read_num") = io readLn >>= pushi
+exec (Keyword "read_byte") = io getChar >>= pushi.toInteger.ord
 
 exec (Keyword "store") = do
-        (_, n) <- pop
         (Just addr, _) <- pop
+        (_, n) <- pop
         vars %= insert addr n
         return ()
 exec (Keyword "sub") = binop (-)
@@ -136,8 +153,8 @@ exec (Keyword "vload") = do
         push (Nothing,x)
         return ()
 exec (Keyword "vstore") = do
-        idx <- popi
         (_,x) <- pop
+        idx <- popi
         (item idx . arry) !!= x
 exec (Keyword "xor") = binop xor
 
@@ -145,9 +162,12 @@ exec (Keyword k) = do
         vs <- access vars
         push (Just k, fromMaybe (IntVal 0) (M.lookup k vs))
 
-loop step = terminate >>= (return () ?? (step >> loop step))
 
 
-runProgram p = runStateT (loop step) (initProg p)
-debugProgram p = runStateT (loop debugStep) (initProg p)
+loop step = step >> (terminate >>= (return () ?? loop step))
+
+runProgWith :: StateT ProgState IO () -> [Tok] -> IO ()
+runProgWith step p = runStateT (loop step) (initProg p) >> return ()
+
+runProgram = runProgWith step 
 
