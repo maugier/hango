@@ -3,8 +3,6 @@
 
 module Mango where
 
--- Mango parser
-
 import Control.Applicative ((<$>), (<$), (<*>))
 import Control.Category
 import Control.Monad.IO.Class
@@ -21,7 +19,9 @@ import Prelude hiding ((.))
 import Text.Parsec hiding (label)
 import Text.Parsec.Char
 
+---------------
 -- Utility code
+
 (??) t _ True  = t
 (??) _ f False = f
 
@@ -29,17 +29,20 @@ io = liftIO
 
 a !!= b = (a != b) >> return ()
 
+-- Lens for array items
 item :: Integer -> Lens (Array Int a) a
 item idx = lens (Data.Array.! (fromInteger idx)) (\v a -> a // [(fromInteger idx,v)])
 
 
--- Parsing stuff
+----------
+-- PARSING
 
 type ProgPtr = [Tok]
 data Tok = Label String
          | Number Integer
          | Keyword String       
 
+-- Show code as text, not as a structure
 instance Show Tok where
 	show (Label s) = s ++ ":"
 	show (Number n) = "\t" ++ show n
@@ -65,15 +68,27 @@ tok =  Number . read <$> many1 digit
 
 program = optional whitespace >> (tok `sepEndBy` whitespace)
 
+------------
 -- Compiling
 
+-- find all labels, will use them as variables later
 allLabels = M.fromList . allLabels' where
         allLabels' [] = []
         allLabels' (Label l : xs) = (l, PtrVal xs) : allLabels' xs
         allLabels' (_ : xs) = allLabels' xs
 
--- Evaluating
+------------
+-- Execution
+
 data Value = IntVal Integer | PtrVal ProgPtr
+
+{- Stack values contain both a value and an optional variable symbol.
+ - This is to get around a language quirk, the "magical" semantics
+ - of 'store' which operates on the name of the last variable pushed
+ - instead of on its content. This seemed a more robust approach
+ - than looking ahead for a 'store' token in the parser to distinguish
+ - symbols from values.
+ -}
 newtype Stack = Stack { unStack :: (Maybe String, Value) }
 
 instance Show Stack where
@@ -93,7 +108,11 @@ data ProgState = ProgState {
 
 $( makeLenses [''ProgState] )
 
-initProg p = ProgState [] (allLabels p) (listArray (0,1000) (repeat (IntVal 0)))  p
+initProg p = ProgState
+	[]               -- empty stack at startup
+	(allLabels p)    -- first convert all labels as pointer variables 
+	(listArray (0,1000) (repeat (IntVal 0))) -- empty array
+	p                -- full program as initial IP
 
 crash reason = (get >>= io.print) >> (ip !!= [])
 
@@ -116,13 +135,9 @@ cjump test = do
 		then ip !!= yes
 		else ip !!= no
 
-step = (ip %%= ucons) >>= exec 
+-- Execution of a single operand
 
-dumpLens l = access l >>= (io . print)
-
-terminate = null <$> access ip
-
-exec (Label _)  = return ()
+exec (Label _)  = return () 
 exec (Number n) = pushi n
 exec (Keyword "add") = binop (+)
 exec (Keyword "call") = do
@@ -162,9 +177,13 @@ exec (Keyword k) = do
         vs <- access vars
         push (Just k, fromMaybe (IntVal 0) (M.lookup k vs))
 
+step = (ip %%= ucons) >>= exec 
 
+dumpLens l = access l >>= (io . print)
 
-loop step = step >> (terminate >>= (return () ?? loop step))
+terminated = null <$> access ip
+
+loop step = step >> (terminated >>= (return () ?? loop step))
 
 runProgWith :: StateT ProgState IO () -> [Tok] -> IO ()
 runProgWith step p = runStateT (loop step) (initProg p) >> return ()

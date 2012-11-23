@@ -21,7 +21,7 @@ oneLineStatus = do
 	ip <- access ip
 	io . hPutStrLn stderr $ case ip of
 		[] -> "terminated."
-	        (ni:_) -> "Instruction: " ++ show ni ++ "\n" ++
+	        (ni:_) -> "Instruction: " ++ show ni ++ "\t" ++
 		          "Stack: " ++ show s
 	
 
