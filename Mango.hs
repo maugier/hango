@@ -1,6 +1,8 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE TemplateHaskell #-}
 
+module Mango where
+
 -- Mango parser
 
 import Control.Applicative ((<$>), (<$), (<*>))
