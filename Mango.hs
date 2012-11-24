@@ -7,12 +7,13 @@ import Control.Applicative ((<$>), (<$), (<*>), (<*))
 import Control.Category
 import Control.Monad.Error
 import Control.Monad.IO.Class
-import Control.Monad.State
+import Control.Monad.State.Strict
 import Data.Bits
 import Data.Char (chr,ord)
+import Data.IntMap.Strict as IM hiding (null)
 import Data.Lens
 import Data.Lens.Template
-import Data.Map as M hiding (null)
+import Data.Map.Strict as M hiding (null)
 import Data.Maybe
 import Prelude hiding ((.))
 import Text.Parsec hiding (label)
@@ -29,8 +30,8 @@ io = liftIO
 a !!= b = (a != b) >> return ()
 
 -- Lens for array items
-item :: Ord k => k -> Lens (Map k v) v
-item idx = lens (! idx) (insert idx)
+item :: Integer -> Lens (IntMap v) v
+item idx = lens (IM.! (fromInteger idx)) (IM.insert (fromInteger idx))
 
 
 ----------
@@ -97,7 +98,7 @@ instance Show Value where
 data ProgState = ProgState {
         _stack :: [Stack],
         _vars  :: Map String Value,
-        _arry  :: Map Integer Value,
+        _arry  :: IntMap Value,
         _ip    :: ProgPtr
 } deriving Show
 
@@ -108,7 +109,7 @@ type MangoT m a = StateT ProgState (ErrorT String m) a
 initProg p = ProgState
 	[]               -- empty stack at startup
 	(allLabels p)    -- first convert all labels as pointer variables 
-	empty            -- empty array
+	IM.empty            -- empty array
 	p                -- full program as initial IP
 
 exit = (ip !!= [])
@@ -120,11 +121,9 @@ m <!> r = catchError m (const $ throwError r)
 push = (>> return ()) . (stack %=) . (:) . Stack 
 pushi x = push (Nothing, IntVal x)
 
-ucons = StateT $ ucons' where
-	ucons' [] = fail "Empty stack"
-	ucons' (h:t) = return (h,t)
+ucons (h:t) = (h,t)
 
-pop  = unStack <$> focus stack ucons
+pop  = unStack <$> (stack !%%= ucons)
 popi = do { (_, IntVal v) <- pop; return v } <!> "Cannot pop required int"
 popp = do { (_, PtrVal p) <- pop; return p } <!> "Cannot pop required ptr"
 pops = do { (Just s, _) <- pop; return s } <!> "Cannot pop symbol"
@@ -160,10 +159,10 @@ exec (Keyword "print_num") = popi >>= io.putStr.show
 exec (Keyword "read_num") = io readLn >>= pushi
 exec (Keyword "read_byte") = io getChar >>= pushi.toInteger.ord
 
-exec (Keyword "store") = do
+exec (Keyword "store") = {-# SCC "store1" #-} do
         addr <- pops
         (_, n) <- pop
-        vars %= insert addr n
+        vars !%= M.insert addr n
         return ()
 exec (Keyword "sub") = binop (-)
 exec (Keyword "vload") = do
@@ -181,7 +180,7 @@ exec (Keyword k) = do
         vs <- access vars
         push (Just k, fromMaybe (IntVal 0) (M.lookup k vs))
 
-fetch = focus ip ucons
+fetch = ip !%%= ucons
 
 step = catchError (fetch >>= exec) crash
 
