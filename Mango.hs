@@ -8,7 +8,6 @@ import Control.Category
 import Control.Monad.Error
 import Control.Monad.IO.Class
 import Control.Monad.State
-import Data.Array
 import Data.Bits
 import Data.Char (chr,ord)
 import Data.Lens
@@ -30,8 +29,8 @@ io = liftIO
 a !!= b = (a != b) >> return ()
 
 -- Lens for array items
-item :: Integer -> Lens (Array Int a) a
-item idx = lens (Data.Array.! (fromInteger idx)) (\v a -> a // [(fromInteger idx,v)])
+item :: Ord k => k -> Lens (Map k v) v
+item idx = lens (! idx) (insert idx)
 
 
 ----------
@@ -98,7 +97,7 @@ instance Show Value where
 data ProgState = ProgState {
         _stack :: [Stack],
         _vars  :: Map String Value,
-        _arry  :: Array Int Value,
+        _arry  :: Map Integer Value,
         _ip    :: ProgPtr
 } deriving Show
 
@@ -109,7 +108,7 @@ type MangoT m a = StateT ProgState (ErrorT String m) a
 initProg p = ProgState
 	[]               -- empty stack at startup
 	(allLabels p)    -- first convert all labels as pointer variables 
-	(listArray (0,1000) (repeat (IntVal 0))) -- empty array
+	empty            -- empty array
 	p                -- full program as initial IP
 
 exit = (ip !!= [])
@@ -126,9 +125,9 @@ ucons = StateT $ ucons' where
 	ucons' (h:t) = return (h,t)
 
 pop  = unStack <$> focus stack ucons
-popi = do { (_, IntVal v) <- pop; return v } <!> "Type error, int expected"
-popp = do { (_, PtrVal p) <- pop; return p } <!> "Type error, ptr expected"
-pops = do { (Just s, _) <- pop; return s } <!> "non-symbolic value on stack"
+popi = do { (_, IntVal v) <- pop; return v } <!> "Cannot pop required int"
+popp = do { (_, PtrVal p) <- pop; return p } <!> "Cannot pop required ptr"
+pops = do { (Just s, _) <- pop; return s } <!> "Cannot pop symbol"
 
 binop f = do { y <- popi; x <- popi; pushi (x `f` y) }
 
