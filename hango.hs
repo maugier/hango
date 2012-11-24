@@ -38,14 +38,14 @@ oneLineStatus = do
 	ip <- access ip
 	io . hPutStrLn stderr $ case ip of
 		[] -> "terminated."
-	        (ni:_) -> "Instruction: " ++ show ni ++ "\t" ++
+	        (ni:_) -> "Instruction: " ++ show ni ++ '\t' : 
 		          "Stack: " ++ show s
 	
 listTok (Label s) = s ++ ":"
-listTok (Number n) = "\t" ++ show n
-listTok (Keyword k) = "\t" ++ k
+listTok (Number n) = '\t' : show n
+listTok (Keyword k) = '\t' : k
 
-listCode l = concat (intersperse "\n" (listTok <$> take 10 l))
+listCode l = intercalate "\n" (listTok <$> take 10 l)
 
 debugStep = do
        oneLineStatus
@@ -61,7 +61,7 @@ debugStep = do
 	       "q" -> ip !!= []
 	       ('e':expr) -> case parse program "" expr of
 		   Left err -> io (putStr "Parse error: " >> print err)
-		   Right tok -> ip %= (tok ++) >> return ()
+		   Right tok -> void (ip %= (tok ++))
                _ -> io $ putStrLn "s - step\nl - list code\nds - dump stack\nda - dump array\ndv - dump vars\ne - evaluate expression"
 
 debugProgram = runProgWith debugStep 

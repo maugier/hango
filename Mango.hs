@@ -27,11 +27,11 @@ import Text.Parsec.Char
 
 io = liftIO
 
-a !!= b = (a != b) >> return ()
+a !!= b = void (a != b)
 
 -- Lens for array items
 item :: Integer -> Lens (IntMap v) v
-item idx = lens (IM.! (fromInteger idx)) (IM.insert (fromInteger idx))
+item idx = lens (IM.! fromInteger idx) (IM.insert (fromInteger idx))
 
 
 ----------
@@ -46,7 +46,7 @@ data Tok = Label String
 
 comment = (string "/*" >> in_comment) <?> "comment"
 voidChar = () <$ anyChar
-in_comment =  (try (string "*/") >> return ())
+in_comment =  void (try (string "*/"))
           <|> ((comment <|> voidChar) >> in_comment) 
           <?> "end of comment"
 
@@ -112,13 +112,13 @@ initProg p = ProgState
 	IM.empty            -- empty array
 	p                -- full program as initial IP
 
-exit = (ip !!= [])
+exit = ip !!= []
 dump :: MangoT IO ()
-dump = (get >>= io.print)
+dump = get >>= io.print
 crash reason = (io.print) reason >> dump >> exit
 m <!> r = catchError m (const $ throwError r)
 
-push = (>> return ()) . (stack %=) . (:) . Stack 
+push = void . (stack !%=) . (:) . Stack 
 pushi x = push (Nothing, IntVal x)
 
 ucons (h:t) = (h,t)
@@ -134,9 +134,7 @@ cjump test = do
 	no <- popp
 	yes <- popp
 	x <- popi
-	if test x
-		then ip !!= yes
-		else ip !!= no
+	ip !!= (yes ?? no) (test x)
 
 -- Execution of a single operand
 
@@ -162,14 +160,12 @@ exec (Keyword "read_byte") = io getChar >>= pushi.toInteger.ord
 exec (Keyword "store") = {-# SCC "store1" #-} do
         addr <- pops
         (_, n) <- pop
-        vars !%= M.insert addr n
-        return ()
+        void (vars !%= M.insert addr n)
 exec (Keyword "sub") = binop (-)
 exec (Keyword "vload") = do
         i <- popi
         x <- access (item i . arry)
-        push (Nothing,x)
-        return ()
+        void.push $ (Nothing,x)
 exec (Keyword "vstore") = do
         (_,x) <- pop
         idx <- popi
