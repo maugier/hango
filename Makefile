@@ -1,5 +1,5 @@
-all: hango
-	ghc -O3 --make $<
+all:
+	ghc -O3 --make hango
 
 clean:
 	rm -f hango *.hi
