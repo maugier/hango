@@ -1,0 +1,9 @@
+=====================================
+Hango, a Mango interpreter in Haskell
+=====================================
+
+Requirements: 
+	data-lens, data-lens-fd, data-lens-template, parsec3
+
+Compilation:
+        ghc --make hango.hs
