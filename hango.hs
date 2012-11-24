@@ -1,19 +1,36 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
+import Control.Applicative
+import Control.Monad.Error
 import Data.Lens
+import Data.List
 import Mango
 import System.Environment
 import System.IO
 import Text.Parsec
 import Text.Parsec.ByteString
 
-decodeArgs :: [String] -> (String, [Tok] -> IO ())
-decodeArgs [file] =  (file, runProgram)
-decodeArgs ["-d",file] = (file, debugProgram)
+warn msg = io . hPutStrLn stderr $ "Execution blocked: " ++ msg
+safeStep = catchError (fetch >>= exec) (\msg -> warn msg >> dump)
 
-main = do
-        args <- getArgs
-	let (f,run) = decodeArgs args
-        Right prog <- parseFromFile program f
+onLeft _ (Right x) = Right x
+onLeft f (Left x) = Left (f x)
+
+wrapError = mapErrorT (fmap (onLeft show))
+
+withErrors m = do
+	r <- runErrorT m
+	case r of
+		Right _ -> return ()
+		Left err -> fail err
+
+decodeArgs [file]      = return (file, runProgram)
+decodeArgs ["-d",file] = return (file, debugProgram)
+decodeArgs _           = fail "Usage: hango [-d] file.mango"
+
+
+main = withErrors $ do
+        (file,run) <- io getArgs >>= decodeArgs
+        prog <- wrapError . ErrorT $ parseFromFile program file
         run prog
 
 oneLineStatus = do
@@ -24,15 +41,20 @@ oneLineStatus = do
 	        (ni:_) -> "Instruction: " ++ show ni ++ "\t" ++
 		          "Stack: " ++ show s
 	
+listTok (Label s) = s ++ ":"
+listTok (Number n) = "\t" ++ show n
+listTok (Keyword k) = "\t" ++ k
+
+listCode l = concat (intersperse "\n" (listTok <$> take 10 l))
 
 debugStep = do
        oneLineStatus
        io $ hPutStr stderr "debug> " 
        command <- io getLine
        case command of
-	       "" -> step
-               "s" -> step
-	       "l" -> dumpLens ip
+	       "" -> safeStep
+               "s" -> safeStep
+	       "l" -> access ip >>= io.putStr.listCode
                "ds" -> dumpLens stack
                "da" -> dumpLens arry
                "dv" -> dumpLens vars

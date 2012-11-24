@@ -3,8 +3,9 @@
 
 module Mango where
 
-import Control.Applicative ((<$>), (<$), (<*>))
+import Control.Applicative ((<$>), (<$), (<*>), (<*))
 import Control.Category
+import Control.Monad.Error
 import Control.Monad.IO.Class
 import Control.Monad.State
 import Data.Array
@@ -12,7 +13,6 @@ import Data.Bits
 import Data.Char (chr,ord)
 import Data.Lens
 import Data.Lens.Template
-import Data.List (intersperse)
 import Data.Map as M hiding (null)
 import Data.Maybe
 import Prelude hiding ((.))
@@ -41,15 +41,10 @@ type ProgPtr = [Tok]
 data Tok = Label String
          | Number Integer
          | Keyword String       
+	 deriving Show
 
--- Show code as text, not as a structure
-instance Show Tok where
-	show (Label s) = s ++ ":"
-	show (Number n) = "\t" ++ show n
-	show (Keyword k) = "\t" ++ k
-	showList l tail = concat (intersperse "\n" (show <$> take 10 l)) ++ tail
 
-comment = string "/*" >> in_comment
+comment = (string "/*" >> in_comment) <?> "comment"
 voidChar = () <$ anyChar
 in_comment =  (try (string "*/") >> return ())
           <|> ((comment <|> voidChar) >> in_comment) 
@@ -66,7 +61,8 @@ tok =  Number . read <$> many1 digit
                  <|> return (Keyword ident)
    <?> "token"
 
-program = optional whitespace >> (tok `sepEndBy` whitespace)
+-- eof here chokes on trailing garbage, but prevents single-pass parsing
+program = optional whitespace >> (tok `sepEndBy1` whitespace) <* eof
 
 ------------
 -- Compiling
@@ -108,22 +104,31 @@ data ProgState = ProgState {
 
 $( makeLenses [''ProgState] )
 
+type MangoT m a = StateT ProgState (ErrorT String m) a
+
 initProg p = ProgState
 	[]               -- empty stack at startup
 	(allLabels p)    -- first convert all labels as pointer variables 
 	(listArray (0,1000) (repeat (IntVal 0))) -- empty array
 	p                -- full program as initial IP
 
-crash reason = (get >>= io.print) >> (ip !!= [])
+exit = (ip !!= [])
+dump :: MangoT IO ()
+dump = (get >>= io.print)
+crash reason = (io.print) reason >> dump >> exit
+m <!> r = catchError m (const $ throwError r)
 
 push = (>> return ()) . (stack %=) . (:) . Stack 
 pushi x = push (Nothing, IntVal x)
 
-ucons l = (head l, tail l)
+ucons = StateT $ ucons' where
+	ucons' [] = fail "Empty stack"
+	ucons' (h:t) = return (h,t)
 
-pop  = unStack <$> (stack %%= ucons)
-popi = do { (_, IntVal v) <- pop; return v }
-popp = do { (_, PtrVal p) <- pop; return p }
+pop  = unStack <$> focus stack ucons
+popi = do { (_, IntVal v) <- pop; return v } <!> "Type error, int expected"
+popp = do { (_, PtrVal p) <- pop; return p } <!> "Type error, ptr expected"
+pops = do { (Just s, _) <- pop; return s } <!> "non-symbolic value on stack"
 
 binop f = do { y <- popi; x <- popi; pushi (x `f` y) }
 
@@ -146,7 +151,7 @@ exec (Keyword "call") = do
         push (Nothing, PtrVal cur)
         ip !!= tgt
 exec (Keyword "dup") = do { x <- pop; push x; push x }
-exec (Keyword "exit") = ip !!= []
+exec (Keyword "exit") = exit
 exec (Keyword "ifz") = cjump (== 0)
 exec (Keyword "ifg") = cjump (> 0)
 exec (Keyword "jump") = popp >>= (ip !!=)
@@ -157,7 +162,7 @@ exec (Keyword "read_num") = io readLn >>= pushi
 exec (Keyword "read_byte") = io getChar >>= pushi.toInteger.ord
 
 exec (Keyword "store") = do
-        (Just addr, _) <- pop
+        addr <- pops
         (_, n) <- pop
         vars %= insert addr n
         return ()
@@ -177,7 +182,9 @@ exec (Keyword k) = do
         vs <- access vars
         push (Just k, fromMaybe (IntVal 0) (M.lookup k vs))
 
-step = (ip %%= ucons) >>= exec 
+fetch = focus ip ucons
+
+step = catchError (fetch >>= exec) crash
 
 dumpLens l = access l >>= (io . print)
 
@@ -185,8 +192,7 @@ terminated = null <$> access ip
 
 loop step = step >> (terminated >>= (return () ?? loop step))
 
-runProgWith :: StateT ProgState IO () -> [Tok] -> IO ()
-runProgWith step p = runStateT (loop step) (initProg p) >> return ()
+runProgWith step p = evalStateT (loop step) (initProg p)
 
 runProgram = runProgWith step 
 
