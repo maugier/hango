@@ -2,6 +2,10 @@
 Hango, a Mango interpreter in Haskell
 =====================================
 
+What is Mango?
+	a made-up language for a little computer science puzzle
+	hxxp://hack DOT quaxio DOT com/mango DOT php
+
 Requirements: 
 	data-lens, data-lens-fd, data-lens-template, parsec3
 
